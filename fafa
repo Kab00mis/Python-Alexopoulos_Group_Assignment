@@ -1,7 +1,90 @@
-# Φορτώνουμε τα πραγματικά αποτελέσματα από το Task 1
-tau_unit = pd.read_csv(r"C:\Users\Bagel\Desktop\Python_Task_2\unit_effect_labels.csv")
-tau_unit = tau_unit.rename(columns={'tau_i': 'avg_tau', 'H_i': 'high_effect'})
+# =============================================================================
+# ΑΝΤΙΚΑΤΕΣΤΗΣΕ στον task1.py το κομμάτι "# 13. Required plots" με αυτό:
+# =============================================================================
 
-median_tau = tau_unit['avg_tau'].median()
-print(f"Διάμεσος treatment effect: {median_tau:.4f}")
-print(f"Κατανομή Hi:\n{tau_unit['high_effect'].value_counts()}")
+# -----------------------------------------------------------------------------
+# 1.3 Mean observed outcome over time (ever-treated vs never-treated)
+# -----------------------------------------------------------------------------
+plot_df = df.groupby(['time', 'ever_treated'])['outcome'].mean().reset_index()
+
+# Χωρίζουμε σε δύο ομάδες για καθαρότερο plot
+never = plot_df[plot_df['ever_treated'] == 0]
+ever  = plot_df[plot_df['ever_treated'] == 1]
+
+plt.figure(figsize=(10, 5))
+plt.plot(never['time'], never['outcome'], 'o-', color='steelblue',
+         label='Never Treated')
+plt.plot(ever['time'],  ever['outcome'],  's-', color='tomato',
+         label='Ever Treated')
+plt.title('1.3 — Mean Observed Outcome Over Time', fontsize=13)
+plt.xlabel('Time Period')
+plt.ylabel('Mean Outcome')
+plt.legend()
+plt.grid(alpha=0.4)
+plt.tight_layout()
+plt.savefig(r"C:\Users\Bagel\Desktop\Python_Task_2\plot_1_3_mean_outcome.png", dpi=150)
+plt.show()
+print("Saved: plot_1_3_mean_outcome.png")
+
+# -----------------------------------------------------------------------------
+# 1.7 Τέσσερις treated units — ΟΛΕΣ ΣΕ ΜΙΑ ΕΙΚΟΝΑ (2x2 grid)
+# -----------------------------------------------------------------------------
+treated_units_list = df[df['ever_treated'] == 1]['unit_id'].unique()
+selected_units = treated_units_list[:4]  # παίρνουμε τις πρώτες 4
+
+fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+axes = axes.flatten()  # για εύκολη πρόσβαση με index
+
+for idx, unit in enumerate(selected_units):
+    ax = axes[idx]
+    unit_df = df[df['unit_id'] == unit].sort_values('time')
+    treat_t  = unit_df['treat_time'].iloc[0]
+
+    ax.plot(unit_df['time'], unit_df['outcome'],
+            'o-', color='steelblue', label='Observed')
+    ax.plot(unit_df['time'], unit_df['pred0'],
+            's--', color='tomato', label='Predicted No-Treatment')
+    ax.axvline(x=treat_t, color='green', linestyle='--', linewidth=1.5,
+               label=f'Treatment Start (t={int(treat_t)})')
+    ax.set_title(f'Unit {unit}', fontsize=11)
+    ax.set_xlabel('Time')
+    ax.set_ylabel('Outcome')
+    ax.legend(fontsize=8)
+    ax.grid(alpha=0.4)
+
+fig.suptitle('1.7 — Observed vs Predicted No-Treatment Path (4 Treated Units)',
+             fontsize=13, y=1.01)
+plt.tight_layout()
+plt.savefig(r"C:\Users\Bagel\Desktop\Python_Task_2\plot_1_7_units.png",
+            dpi=150, bbox_inches='tight')
+plt.show()
+print("Saved: plot_1_7_units.png")
+
+# -----------------------------------------------------------------------------
+# 1.9 Event-time ATT — line plot με confidence band
+# -----------------------------------------------------------------------------
+event_att_df = event_att.reset_index()
+event_att_df.columns = ['event_time', 'ATT']
+
+plt.figure(figsize=(10, 5))
+plt.plot(event_att_df['event_time'], event_att_df['ATT'],
+         marker='o', linestyle='-', color='steelblue', linewidth=2,
+         markersize=7, label='Event-time ATT')
+plt.axhline(y=0, color='gray', linestyle='--', linewidth=1, label='Zero line')
+
+# Προσθέτουμε τιμές πάνω από κάθε σημείο
+for _, row in event_att_df.iterrows():
+    plt.text(row['event_time'], row['ATT'] + 0.05,
+             f"{row['ATT']:.2f}", ha='center', fontsize=8)
+
+plt.title('1.9 — Event-Time ATT (Average Treatment Effect on the Treated)',
+          fontsize=13)
+plt.xlabel('Event Time (Periods Since Treatment Start)')
+plt.ylabel('ATT')
+plt.xticks(event_att_df['event_time'].astype(int))
+plt.legend()
+plt.grid(alpha=0.4)
+plt.tight_layout()
+plt.savefig(r"C:\Users\Bagel\Desktop\Python_Task_2\plot_1_9_event_att.png", dpi=150)
+plt.show()
+print("Saved: plot_1_9_event_att.png")
