@@ -1,519 +1,435 @@
-#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Exercise 1: Causal inference with autoencoders (Matrix Completion)
+Created on Mon Apr 27 01:38:57 2026
+
+@author: Bagel
 """
-
 # =============================================================================
-# Exercise 1: Causal inference with autoencoders (Matrix Completion)
+# EXERCISE 2: TEXT ANALYTICS CONNECTED TO CAUSAL EXERCISE
 # =============================================================================
 
-import numpy as np
+# --- Βιβλιοθήκες ---
 import pandas as pd
+import numpy as np
 import matplotlib.pyplot as plt
-import seaborn as sns
-from sklearn.preprocessing import StandardScaler
+import re
+from collections import Counter
+
+# NLP βιβλιοθήκες
+import nltk
+from nltk.corpus import stopwords
+from nltk.tokenize import word_tokenize
+from wordcloud import WordCloud
+
+# Sklearn για TF-IDF και Logistic Regression
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import (confusion_matrix, classification_report, accuracy_score, ConfusionMatrixDisplay)
+
+# TensorFlow/Keras για το νευρωνικό μοντέλο
 import tensorflow as tf
-from tensorflow.keras.models import Model
-from tensorflow.keras.layers import Input, Dense
-from tensorflow.keras.optimizers import Adam
-import warnings
-warnings.filterwarnings('ignore')
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import (Embedding, GlobalAveragePooling1D, Dense)
+from tensorflow.keras.preprocessing.text import Tokenizer
+from tensorflow.keras.preprocessing.sequence import pad_sequences
 
-# Set random seeds for reproducibility
-np.random.seed(42)
-tf.random.set_seed(42)
+# Κατεβάζουμε τα απαραίτητα πακέτα NLTK αν δεν υπάρχουν
+nltk.download('punkt', quiet=True)
+nltk.download('stopwords', quiet=True)
+nltk.download('punkt_tab', quiet=True)
 
-# -----------------------------------------------------------------------------
-# 1. Load and sort data
-# -----------------------------------------------------------------------------
-df = pd.read_csv(r"C:\Users\Bagel\Desktop\Python_Task_2\causal_panel_data.csv")
-df = df.sort_values(['unit_id', 'time']).reset_index(drop=True)
+# =============================================================================
+# ΒΗΜΑ 0: ΠΡΟΣΟΜΟΙΩΣΗ ΑΠΟΤΕΛΕΣΜΑΤΩΝ ΑΣΚΗΣΗΣ 1
+# (Σε κανονική εργασία εδώ θα φορτώνες τα αποτελέσματα του Exercise 1)
+# Εδώ δημιουργούμε placeholder treatment effects για να τρέξει ο κώδικας
+# αυτόνομα — στην τελική υποβολή αντικατέστησε με τα πραγματικά αποτελέσματα
+# =============================================================================
 
-# Verify each unit has 24 observations
-units = df['unit_id'].unique()
-time_per_unit = df.groupby('unit_id')['time'].nunique()
-assert (time_per_unit == 24).all(), "Not all units have 24 time periods"
-N_units = len(units)
-T_periods = 24
+# Φορτώνουμε τα panel data για να εντοπίσουμε τις treated μονάδες
+df_panel = pd.read_csv(r"C:\Users\\Bagel\Desktop\Python_Task_2\causal_panel_data.csv")
 
-prop_ever_treated = df[['unit_id', 'ever_treated']].drop_duplicates()['ever_treated'].mean()
+# Κρατάμε μόνο τις treated μονάδες (ever_treated == 1)
+treated_units = df_panel[df_panel['ever_treated'] == 1]['unit_id'].unique()
 
-print(f"Number of units: {N_units}")
-print(f"Number of time periods: {T_periods}")
-print(f"Proportion ever-treated: {prop_ever_treated:.3f}")
+# ΣΕ ΚΑΝΟΝΙΚΗ ΧΡΗΣΗ: αντικατέστησε αυτό με τα πραγματικά tau_hat
+# από το autoencoder του Exercise 1
+# Παράδειγμα: tau_unit = df_from_exercise1[['unit_id','avg_tau']]
+# Φορτώνουμε τα πραγματικά αποτελέσματα από το Task 1
+tau_unit = pd.read_csv(r"C:\Users\Bagel\Desktop\Python_Task_2\unit_effect_labels.csv")
+tau_unit = tau_unit.rename(columns={'tau_i': 'avg_tau', 'H_i': 'high_effect'})
 
-# -----------------------------------------------------------------------------
-# 2. Create wide outcome matrix Y (units x time)
-# -----------------------------------------------------------------------------
-Y_wide = df.pivot(index='unit_id', columns='time', values='outcome')
-Y_wide = Y_wide.sort_index()
-Y = Y_wide.values  # shape (N, T)
+# =============================================================================
+# ΒΗΜΑ 1: ΔΗΜΙΟΥΡΓΙΑ BINARY LABEL Hi
+# Ορίζουμε Hi = 1 αν το avg_tau της μονάδας είναι πάνω από τη διάμεσο
+# =============================================================================
 
-print(f"Wide outcome matrix dimension: {Y.shape}")
+# Υπολογίζουμε τη διάμεσο του treatment effect μεταξύ των treated μονάδων
+median_tau = tau_unit['avg_tau'].median()
+print(f"Διάμεσος treatment effect: {median_tau:.4f}")
+print(f"Κατανομή Hi:\n{tau_unit['high_effect'].value_counts()}")
 
-# -----------------------------------------------------------------------------
-# 3. Create mask M (1 = observed, 0 = masked for treated post-treatment)
-# -----------------------------------------------------------------------------
-treat_time_df = df[['unit_id', 'treat_time']].drop_duplicates().set_index('unit_id')
-treat_time_dict = treat_time_df['treat_time'].to_dict()
+# =============================================================================
+# TASK 2.1: ΦΟΡΤΩΣΗ ΚΕΙΜΕΝΩΝ ΚΑΙ MERGE ΜΕ ΤΟ LABEL
+# =============================================================================
 
-M = np.ones_like(Y, dtype=float)
-for i, unit in enumerate(Y_wide.index):
-    t_treat = treat_time_dict.get(unit, np.inf)
-    if not np.isnan(t_treat):
-        times = Y_wide.columns.values
-        M[i, times >= t_treat] = 0.0
+# Φορτώνουμε τα κείμενα κάθε μονάδας
+df_text = pd.read_csv(r"C:\Users\\Bagel\Desktop\Python_Task_2\unit_text_data.csv")
+print(f"\nΔιαστάσεις text data: {df_text.shape}")
+print(df_text.head(3))
 
-treated_post_mask = (M == 0)
-n_treated_post = np.sum(treated_post_mask)
-print(f"Number of treated observations in post-treatment periods: {n_treated_post}")
+# Συνδέουμε (merge) τα κείμενα με το binary label βάσει unit_id
+df = df_text.merge(tau_unit[['unit_id', 'high_effect']], on='unit_id', how='inner')
 
-# -----------------------------------------------------------------------------
-# 4. Fill masked entries temporarily with 0 (for input)
-# -----------------------------------------------------------------------------
-Y_fill = Y.copy()
-Y_fill[M == 0] = 0.0
+# Κρατάμε μόνο τις treated μονάδες που έχουν label (inner join ήδη το κάνει)
+print(f"\nΔιαστάσεις μετά το merge (treated μόνο): {df.shape}")
+print(f"Κατανομή high_effect:\n{df['high_effect'].value_counts()}")
 
-# -----------------------------------------------------------------------------
-# 5. Add covariates
-# -----------------------------------------------------------------------------
-unit_covars = df[['unit_id', 'region', 'sector', 'size', 'digital_index',
-                  'productivity_index', 'credit_score']].drop_duplicates().set_index('unit_id')
-unit_covars = unit_covars.loc[Y_wide.index]
+# =============================================================================
+# TASK 2.2: ΠΡΟΕΠΕΞΕΡΓΑΣΙΑ ΚΕΙΜΕΝΟΥ
+# =============================================================================
 
-region_dummies = pd.get_dummies(unit_covars['region'], prefix='region')
-sector_dummies = pd.get_dummies(unit_covars['sector'], prefix='sector')
+# Παίρνουμε τα αγγλικά stopwords (λέξεις χωρίς σημασία: the, is, a, ...)
+stop_words = set(stopwords.words('english'))
 
-continuous_vars = ['size', 'digital_index', 'productivity_index', 'credit_score']
-scaler_cont = StandardScaler()
-cont_scaled = scaler_cont.fit_transform(unit_covars[continuous_vars])
-cont_scaled_df = pd.DataFrame(cont_scaled, columns=continuous_vars, index=unit_covars.index)
+def preprocess_text(text):
+    """
+    Συνάρτηση που καθαρίζει και προετοιμάζει ένα κείμενο:
+    1. Μετατροπή σε πεζά
+    2. Αφαίρεση σημείων στίξης
+    3. Tokenization (διαχωρισμός σε λέξεις)
+    4. Αφαίρεση stopwords
+    """
+    # Μετατρέπουμε όλο το κείμενο σε πεζά γράμματα
+    text = text.lower()
 
-covariates = pd.concat([region_dummies, sector_dummies, cont_scaled_df], axis=1)
-covariates_matrix = covariates.values
+    # Αφαιρούμε οτιδήποτε δεν είναι γράμμα ή κενό (π.χ. τελείες, κόμματα)
+    text = re.sub(r'[^a-z\s]', '', text)
 
-X_masked = Y_fill
-X_mask = M
-X = np.hstack([X_masked, X_mask, covariates_matrix])
-input_dim = X.shape[1]
-output_dim = T_periods
+    # Χωρίζουμε το κείμενο σε μεμονωμένες λέξεις (tokens)
+    tokens = word_tokenize(text)
 
-# -----------------------------------------------------------------------------
-# 6. Standardize outcome columns using only observed (mask=1) values
-# -----------------------------------------------------------------------------
-Y_std = np.zeros_like(Y)
-Y_mean = np.zeros(T_periods)
-Y_stddev = np.ones(T_periods)
+    # Κρατάμε μόνο λέξεις που ΔΕΝ είναι stopwords
+    tokens = [t for t in tokens if t not in stop_words]
 
-for t in range(T_periods):
-    observed_vals = Y[:, t][M[:, t] == 1]
-    if len(observed_vals) > 0:
-        mean_t = observed_vals.mean()
-        std_t = observed_vals.std()
-        if std_t < 1e-6:
-            std_t = 1.0
-        Y_mean[t] = mean_t
-        Y_stddev[t] = std_t
-        Y_std[:, t] = (Y[:, t] - mean_t) / std_t
-    else:
-        Y_std[:, t] = Y[:, t]
+    return tokens
 
-X_masked_std = np.zeros_like(Y_fill)
-for t in range(T_periods):
-    X_masked_std[:, t] = (Y_fill[:, t] - Y_mean[t]) / Y_stddev[t]
+# Εφαρμόζουμε την προεπεξεργασία σε όλα τα κείμενα
+df['tokens'] = df['text_note'].apply(preprocess_text)
 
-X_masked_std[M == 0] = 0.0
+# Δημιουργούμε και μια "clean" έκδοση ως string (για TF-IDF και neural)
+df['clean_text'] = df['tokens'].apply(lambda tokens: ' '.join(tokens))
 
-X_std = np.hstack([X_masked_std, X_mask, covariates_matrix])
-X_std = X_std.astype(np.float32)
-Y_std = Y_std.astype(np.float32)
-M = M.astype(np.float32)
+print("\nΠαράδειγμα προεπεξεργασμένου κειμένου:")
+print(df['clean_text'].iloc[0][:200])
 
-# -----------------------------------------------------------------------------
-# 7. Build autoencoder
-# -----------------------------------------------------------------------------
-def build_autoencoder(input_dim, output_dim):
-    input_layer = Input(shape=(input_dim,))
-    dense1 = Dense(64, activation='relu')(input_layer)
-    bottleneck = Dense(16, activation='relu')(dense1)
-    dense2 = Dense(64, activation='relu')(bottleneck)
-    output_layer = Dense(output_dim, activation='linear')(dense2)
-    model = Model(inputs=input_layer, outputs=output_layer)
-    return model
+# =============================================================================
+# TASK 2.3: ΣΥΧΝΟΤΗΤΑ ΛΕΞΕΩΝ, BAR PLOT, WORD CLOUD
+# =============================================================================
 
-# -----------------------------------------------------------------------------
-# 8. Custom training loop with masked loss
-# -----------------------------------------------------------------------------
-def masked_mse(y_true, y_pred, mask):
-    sq_diff = tf.square(y_true - y_pred)
-    masked_sq_diff = sq_diff * mask
-    loss = tf.reduce_sum(masked_sq_diff) / (tf.reduce_sum(mask) + 1e-8)
-    return loss
+# --- 15 πιο συχνές λέξεις ---
 
-def train_autoencoder(X_std, Y_std, M, input_dim, output_dim,
-                      batch_size=32, epochs=100, patience=10, verbose=True):
-    autoencoder = build_autoencoder(input_dim, output_dim)
-    optimizer = Adam(learning_rate=0.001)
+# Ενώνουμε όλα τα tokens σε μία λίστα για να μετρήσουμε συχνότητες
+all_tokens = [token for tokens in df['tokens'] for token in tokens]
 
-    best_loss = np.inf
-    wait = 0
-    best_weights = None
+# Counter μετράει πόσες φορές εμφανίζεται κάθε λέξη
+word_freq = Counter(all_tokens)
 
-    if verbose:
-        print("\nTraining autoencoder with masked loss...")
+# Παίρνουμε τις 15 πιο συχνές λέξεις
+top_15 = word_freq.most_common(15)
+top_words, top_counts = zip(*top_15)  # χωρισμός σε δύο λίστες
 
-    for epoch in range(epochs):
-        indices = np.random.permutation(X_std.shape[0])
-        epoch_loss = 0.0
-        n_batches = 0
+print("\n15 πιο συχνές λέξεις:")
+for word, count in top_15:
+    print(f"  {word}: {count}")
 
-        for start in range(0, X_std.shape[0], batch_size):
-            end = min(start + batch_size, X_std.shape[0])
-            batch_idx = indices[start:end]
-            X_batch = X_std[batch_idx]
-            Y_batch = Y_std[batch_idx]
-            M_batch = M[batch_idx]
+# --- Bar plot top 15 λέξεων ---
+fig, axes = plt.subplots(1, 2, figsize=(16, 5))
 
-            with tf.GradientTape() as tape:
-                Y_pred = autoencoder(X_batch, training=True)
-                loss = masked_mse(Y_batch, Y_pred, M_batch)
+# Οριζόντιο bar chart με τις 15 συχνότερες λέξεις
+axes[0].barh(top_words[::-1], top_counts[::-1], color='steelblue')
+axes[0].set_xlabel('Συχνότητα')
+axes[0].set_title('Top 15 Πιο Συχνές Λέξεις')
+axes[0].grid(axis='x', alpha=0.4)
 
-            grads = tape.gradient(loss, autoencoder.trainable_variables)
-            optimizer.apply_gradients(zip(grads, autoencoder.trainable_variables))
-            epoch_loss += loss.numpy()
-            n_batches += 1
+# --- Word Cloud ---
+# Δημιουργούμε word cloud από όλα τα κείμενα μαζί
+all_text_combined = ' '.join(df['clean_text'])
+wordcloud = WordCloud(
+    width=800, height=400,
+    background_color='white',
+    max_words=100,
+    colormap='Blues'
+).generate(all_text_combined)
 
-        avg_loss = epoch_loss / n_batches
+axes[1].imshow(wordcloud, interpolation='bilinear')
+axes[1].axis('off')
+axes[1].set_title('Word Cloud')
 
-        if verbose:
-            print(f"Epoch {epoch+1}/{epochs}, Loss: {avg_loss:.6f}")
+plt.tight_layout()
+plt.savefig(r"C:\Users\\Bagel\Desktop\Python_Task_2\wordfreqcloud.png", dpi=150)
+plt.show()
+print("Αποθηκεύτηκε: ex2_wordfreq_cloud.png")
 
-        if avg_loss < best_loss:
-            best_loss = avg_loss
-            wait = 0
-            best_weights = autoencoder.get_weights()
-        else:
-            wait += 1
-            if wait >= patience:
-                if verbose:
-                    print(f"Early stopping at epoch {epoch+1}")
-                break
+# =============================================================================
+# TASK 2.4: TF-IDF + LOGISTIC REGRESSION
+# =============================================================================
 
-    if best_weights is not None:
-        autoencoder.set_weights(best_weights)
+# Χωρίζουμε σε features (X) και label (y)
+X = df['clean_text']
+y = df['high_effect']
 
-    return autoencoder, best_loss
+# Χωρίζουμε σε training (80%) και test (20%) set
+# random_state=42 για αναπαραγωγιμότητα
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.2, random_state=42, stratify=y
+)
+print(f"\nTraining set: {len(X_train)} δείγματα, Test set: {len(X_test)} δείγματα")
 
-autoencoder, best_loss = train_autoencoder(
-    X_std, Y_std, M, input_dim, output_dim,
-    batch_size=32, epochs=100, patience=10, verbose=True
+# TF-IDF Vectorizer: μετατρέπει κάθε κείμενο σε αριθμητικό διάνυσμα
+# max_features=500: κρατάμε τις 500 πιο σημαντικές λέξεις
+# ngram_range=(1,2): χρησιμοποιεί μονά και διπλά n-grams
+tfidf = TfidfVectorizer(max_features=500, ngram_range=(1, 2))
+
+# Εκπαιδεύουμε τον vectorizer ΜΟΝΟ στο training set (αποφυγή data leakage)
+X_train_tfidf = tfidf.fit_transform(X_train)
+# Εφαρμόζουμε τον ίδιο μετασχηματισμό στο test set
+X_test_tfidf = tfidf.transform(X_test)
+
+# Logistic Regression: απλό γραμμικό ταξινομητικό μοντέλο
+# max_iter=1000: αριθμός επαναλήψεων για σύγκλιση
+lr_model = LogisticRegression(max_iter=1000, random_state=42)
+lr_model.fit(X_train_tfidf, y_train)  # εκπαίδευση μόνο στο train set
+
+# Προβλέψεις στο test set
+y_pred_lr = lr_model.predict(X_test_tfidf)
+
+# =============================================================================
+# TASK 2.5: ΑΞΙΟΛΟΓΗΣΗ TF-IDF ΜΟΝΤΕΛΟΥ
+# =============================================================================
+
+print("\n" + "="*50)
+print("ΑΠΟΤΕΛΕΣΜΑΤΑ: TF-IDF + Logistic Regression")
+print("="*50)
+
+# Confusion matrix: πίνακας που δείχνει TP, TN, FP, FN
+cm_lr = confusion_matrix(y_test, y_pred_lr)
+print(f"Confusion Matrix:\n{cm_lr}")
+
+# Classification report: precision, recall, F1 ανά κλάση
+print(f"\nClassification Report:\n{classification_report(y_test, y_pred_lr)}")
+
+# Συνολική ακρίβεια
+acc_lr = accuracy_score(y_test, y_pred_lr)
+print(f"Accuracy: {acc_lr:.4f}")
+
+# Οπτικοποίηση confusion matrix για TF-IDF
+fig, ax = plt.subplots(figsize=(5, 4))
+ConfusionMatrixDisplay(cm_lr, display_labels=['Low Effect', 'High Effect']).plot(ax=ax)
+ax.set_title('Confusion Matrix — TF-IDF + Logistic Regression')
+plt.tight_layout()
+plt.savefig(r"C:\Users\\Bagel\Desktop\Python_Task_2\logreg.png", dpi=150)
+plt.show()
+
+# =============================================================================
+# TASK 2.6: NEURAL TEXT CLASSIFIER
+# =============================================================================
+
+# --- Tokenization και padding ---
+
+# Μέγεθος λεξιλογίου (κρατάμε τις 1000 πιο συχνές λέξεις)
+VOCAB_SIZE = 1000
+# Μήκος κάθε ακολουθίας (padding/truncation στα 100 tokens)
+MAX_LEN = 100
+# Διάσταση embedding (κάθε λέξη αναπαρίσταται με διάνυσμα 32 στοιχείων)
+EMBEDDING_DIM = 32
+
+# Keras Tokenizer: δίνει σε κάθε λέξη έναν ακέραιο αριθμό (index)
+tokenizer_nn = Tokenizer(num_words=VOCAB_SIZE, oov_token='<OOV>')
+
+# Εκπαίδευση tokenizer ΜΟΝΟ στο training set
+tokenizer_nn.fit_on_texts(X_train)
+
+# Μετατροπή κειμένων σε ακολουθίες ακεραίων
+X_train_seq = tokenizer_nn.texts_to_sequences(X_train)
+X_test_seq  = tokenizer_nn.texts_to_sequences(X_test)
+
+# Padding: όλες οι ακολουθίες γίνονται ίδιου μήκους (MAX_LEN)
+# post: προσθέτουμε μηδενικά στο τέλος αν η ακολουθία είναι κοντύτερη
+X_train_pad = pad_sequences(X_train_seq, maxlen=MAX_LEN, padding='post',
+                             truncating='post')
+X_test_pad  = pad_sequences(X_test_seq,  maxlen=MAX_LEN, padding='post',
+                             truncating='post')
+
+# Μετατροπή labels σε numpy arrays
+y_train_arr = np.array(y_train)
+y_test_arr  = np.array(y_test)
+
+# --- Αρχιτεκτονική νευρωνικού ---
+nn_model = Sequential([
+    # Embedding layer: μαθαίνει αναπαραστάσεις λέξεων ως πυκνά διανύσματα
+    Embedding(input_dim=VOCAB_SIZE, output_dim=EMBEDDING_DIM,
+              input_length=MAX_LEN),
+
+    # GlobalAveragePooling1D: παίρνει τον μέσο όρο των embeddings
+    # μετατρέπει (batch, MAX_LEN, 32) → (batch, 32)
+    GlobalAveragePooling1D(),
+
+    # Dense hidden layer με ReLU activation
+    Dense(32, activation='relu'),
+
+    # Output layer: 1 νευρώνας με sigmoid → πιθανότητα κλάσης 1
+    Dense(1, activation='sigmoid')
+])
+
+# Compile: ορίζουμε loss, optimizer και μετρική αξιολόγησης
+nn_model.compile(
+    optimizer='adam',
+    loss='binary_crossentropy',  # για binary classification
+    metrics=['accuracy']
 )
 
-print(f"Final training loss (masked MSE): {best_loss:.6f}")
+nn_model.summary()
 
-# -----------------------------------------------------------------------------
-# 9. Predict missing no-treatment outcomes
-# -----------------------------------------------------------------------------
-Y_pred_std = autoencoder.predict(X_std, verbose=0)
-
-Y_pred = np.zeros_like(Y_pred_std)
-for t in range(T_periods):
-    Y_pred[:, t] = Y_pred_std[:, t] * Y_stddev[t] + Y_mean[t]
-
-Yhat0 = Y_pred.copy()
-
-# -----------------------------------------------------------------------------
-# 10. Estimate treatment effects
-# -----------------------------------------------------------------------------
-units_list = Y_wide.index.tolist()
-times_list = Y_wide.columns.tolist()
-
-long_results = []
-for i, unit in enumerate(units_list):
-    for t_idx, time in enumerate(times_list):
-        pred0 = Yhat0[i, t_idx]
-        mask_val = M[i, t_idx]
-        treated_post = (mask_val == 0)
-        long_results.append({
-            'unit_id': unit,
-            'time': time,
-            'pred0': pred0,
-            'treated_post': treated_post
-        })
-
-df_long = pd.DataFrame(long_results)
-
-df = df.drop(columns=['pred0', 'treated_post'], errors='ignore')
-df = df.merge(df_long[['unit_id', 'time', 'pred0', 'treated_post']],
-              on=['unit_id', 'time'], how='left')
-
-df['tau'] = np.where(df['treated_post'], df['outcome'] - df['pred0'], np.nan)
-
-# -----------------------------------------------------------------------------
-# 11. Compute ATT estimates
-# -----------------------------------------------------------------------------
-overall_att = df[df['treated_post']]['tau'].mean()
-print(f"\nOverall ATT: {overall_att:.6f}")
-
-event_att = df[df['event_time'] >= 0].groupby('event_time')['tau'].mean().dropna()
-print("\nEvent-time ATT:")
-print(event_att)
-
-region_att = df[df['treated_post']].groupby('region')['tau'].mean().dropna()
-print("\nRegion-specific ATT:")
-print(region_att)
-
-sector_att = df[df['treated_post']].groupby('sector')['tau'].mean().dropna()
-print("\nSector-specific ATT:")
-print(sector_att)
-
-med_digital = df[['unit_id', 'digital_index']].drop_duplicates()['digital_index'].median()
-high_digital_att = df[(df['treated_post']) & (df['digital_index'] > med_digital)]['tau'].mean()
-low_digital_att  = df[(df['treated_post']) & (df['digital_index'] <= med_digital)]['tau'].mean()
-
-print(f"\nATT for high digital (> median): {high_digital_att:.6f}")
-print(f"ATT for low digital (<= median): {low_digital_att:.6f}")
-
-# -----------------------------------------------------------------------------
-# 12. Bootstrap confidence intervals
-# -----------------------------------------------------------------------------
-B = 50
-np.random.seed(42)
-
-boot_overall      = []
-boot_region       = {r: [] for r in df['region'].dropna().unique()}
-boot_high_digital = []
-boot_low_digital  = []
-
-print(f"\nRunning bootstrap with B={B} replications...")
-
-for b in range(B):
-    boot_units = np.random.choice(units_list, size=len(units_list), replace=True)
-
-    boot_dfs = []
-    for new_id, old_unit in enumerate(boot_units):
-        temp = df[df['unit_id'] == old_unit].copy()
-        temp['boot_unit_id'] = new_id
-        boot_dfs.append(temp)
-
-    df_b = pd.concat(boot_dfs, ignore_index=True)
-
-    Yb_wide = df_b.pivot(index='boot_unit_id', columns='time', values='outcome').sort_index()
-    Yb = Yb_wide.values.astype(float)
-
-    treat_time_b = df_b[['boot_unit_id', 'treat_time']].drop_duplicates().set_index('boot_unit_id')['treat_time'].to_dict()
-
-    Mb = np.ones_like(Yb, dtype=float)
-    for i, unit in enumerate(Yb_wide.index):
-        t_treat = treat_time_b.get(unit, np.inf)
-        if not np.isnan(t_treat):
-            times = Yb_wide.columns.values
-            Mb[i, times >= t_treat] = 0.0
-
-    Yb_fill = Yb.copy()
-    Yb_fill[Mb == 0] = 0.0
-
-    unit_covars_b = df_b[['boot_unit_id', 'region', 'sector', 'size', 'digital_index',
-                          'productivity_index', 'credit_score']].drop_duplicates().set_index('boot_unit_id')
-    unit_covars_b = unit_covars_b.loc[Yb_wide.index]
-
-    region_dummies_b = pd.get_dummies(unit_covars_b['region'], prefix='region')
-    sector_dummies_b = pd.get_dummies(unit_covars_b['sector'], prefix='sector')
-    region_dummies_b = region_dummies_b.reindex(columns=region_dummies.columns, fill_value=0)
-    sector_dummies_b = sector_dummies_b.reindex(columns=sector_dummies.columns, fill_value=0)
-
-    cont_scaled_b    = scaler_cont.transform(unit_covars_b[continuous_vars])
-    cont_scaled_df_b = pd.DataFrame(cont_scaled_b, columns=continuous_vars, index=unit_covars_b.index)
-
-    covariates_b        = pd.concat([region_dummies_b, sector_dummies_b, cont_scaled_df_b], axis=1)
-    covariates_matrix_b = covariates_b.values
-
-    Y_std_b    = np.zeros_like(Yb)
-    Y_mean_b   = np.zeros(T_periods)
-    Y_stddev_b = np.ones(T_periods)
-
-    for t in range(T_periods):
-        observed_vals_b = Yb[:, t][Mb[:, t] == 1]
-        if len(observed_vals_b) > 0:
-            mean_t = observed_vals_b.mean()
-            std_t  = observed_vals_b.std()
-            if std_t < 1e-6:
-                std_t = 1.0
-            Y_mean_b[t]   = mean_t
-            Y_stddev_b[t] = std_t
-            Y_std_b[:, t] = (Yb[:, t] - mean_t) / std_t
-        else:
-            Y_std_b[:, t] = Yb[:, t]
-
-    X_masked_std_b = np.zeros_like(Yb_fill)
-    for t in range(T_periods):
-        X_masked_std_b[:, t] = (Yb_fill[:, t] - Y_mean_b[t]) / Y_stddev_b[t]
-    X_masked_std_b[Mb == 0] = 0.0
-
-    X_std_b = np.hstack([X_masked_std_b, Mb, covariates_matrix_b]).astype(np.float32)
-    Y_std_b = Y_std_b.astype(np.float32)
-    Mb      = Mb.astype(np.float32)
-
-    autoencoder_b, _ = train_autoencoder(
-        X_std_b, Y_std_b, Mb,
-        input_dim=X_std_b.shape[1],
-        output_dim=T_periods,
-        batch_size=32,
-        epochs=100,
-        patience=10,
-        verbose=False
-    )
-
-    Y_pred_std_b = autoencoder_b.predict(X_std_b, verbose=0)
-    Y_pred_b     = np.zeros_like(Y_pred_std_b)
-    for t in range(T_periods):
-        Y_pred_b[:, t] = Y_pred_std_b[:, t] * Y_stddev_b[t] + Y_mean_b[t]
-
-    long_results_b = []
-    for i, unit in enumerate(Yb_wide.index.tolist()):
-        for t_idx, time in enumerate(Yb_wide.columns.tolist()):
-            long_results_b.append({
-                'boot_unit_id': unit,
-                'time': time,
-                'pred0': Y_pred_b[i, t_idx],
-                'treated_post': (Mb[i, t_idx] == 0)
-            })
-
-    df_long_b = pd.DataFrame(long_results_b)
-    df_b = df_b.drop(columns=['pred0', 'treated_post'], errors='ignore')
-    df_b = df_b.merge(df_long_b, on=['boot_unit_id', 'time'], how='left')
-    df_b['tau'] = np.where(df_b['treated_post'], df_b['outcome'] - df_b['pred0'], np.nan)
-
-    boot_overall.append(df_b[df_b['treated_post']]['tau'].mean())
-
-    for reg in boot_region.keys():
-        reg_taus = df_b[(df_b['treated_post']) & (df_b['region'] == reg)]['tau']
-        boot_region[reg].append(reg_taus.mean() if len(reg_taus) > 0 else np.nan)
-
-    med_digital_b = df_b[['boot_unit_id', 'digital_index']].drop_duplicates()['digital_index'].median()
-    high_taus = df_b[(df_b['treated_post']) & (df_b['digital_index'] > med_digital_b)]['tau']
-    low_taus  = df_b[(df_b['treated_post']) & (df_b['digital_index'] <= med_digital_b)]['tau']
-    boot_high_digital.append(high_taus.mean() if len(high_taus) > 0 else np.nan)
-    boot_low_digital.append(low_taus.mean()   if len(low_taus)  > 0 else np.nan)
-
-    if (b + 1) % 10 == 0:
-        print(f"Bootstrap replication {b+1}/{B} completed")
-
-boot_overall      = [x for x in boot_overall      if not np.isnan(x)]
-boot_high_digital = [x for x in boot_high_digital if not np.isnan(x)]
-boot_low_digital  = [x for x in boot_low_digital  if not np.isnan(x)]
-for reg in boot_region:
-    boot_region[reg] = [x for x in boot_region[reg] if not np.isnan(x)]
-
-ci_overall = np.percentile(boot_overall, [2.5, 97.5])
-ci_high    = np.percentile(boot_high_digital, [2.5, 97.5]) if boot_high_digital else [np.nan, np.nan]
-ci_low     = np.percentile(boot_low_digital,  [2.5, 97.5]) if boot_low_digital  else [np.nan, np.nan]
-ci_region  = {r: np.percentile(vals, [2.5, 97.5]) for r, vals in boot_region.items() if len(vals) > 0}
-
-print("\nBootstrap 95% Confidence Intervals (B=50, full refit):")
-print(f"Overall ATT: {ci_overall}")
-print(f"High digital ATT: {ci_high}")
-print(f"Low digital ATT: {ci_low}")
-for r, ci in ci_region.items():
-    print(f"Region {r}: {ci}")
+# Εκπαίδευση νευρωνικού
+# validation_split=0.1: 10% του training set ως validation
+# epochs=20: 20 πλήρεις διαβάσεις του dataset
+# batch_size=16: αριθμός δειγμάτων ανά βήμα gradient descent
+history = nn_model.fit(
+    X_train_pad, y_train_arr,
+    validation_split=0.1,
+    epochs=20,
+    batch_size=16,
+    verbose=1
+)
 
 # =============================================================================
-# 13. PLOTS
+# TASK 2.7: ΑΞΙΟΛΟΓΗΣΗ NEURAL ΜΟΝΤΕΛΟΥ
 # =============================================================================
 
-# -----------------------------------------------------------------------------
-# 1.3 Mean observed outcome over time (ever-treated vs never-treated)
-# -----------------------------------------------------------------------------
-plot_df = df.groupby(['time', 'ever_treated'])['outcome'].mean().reset_index()
-never   = plot_df[plot_df['ever_treated'] == 0]
-ever    = plot_df[plot_df['ever_treated'] == 1]
+# Προβλέψεις: sigmoid δίνει πιθανότητες, threshold 0.5 για binary
+y_pred_nn_prob = nn_model.predict(X_test_pad).flatten()
+y_pred_nn = (y_pred_nn_prob >= 0.5).astype(int)
 
-plt.figure(figsize=(10, 5))
-plt.plot(never['time'], never['outcome'], 'o-', color='steelblue',
-         label='Never Treated')
-plt.plot(ever['time'],  ever['outcome'],  's-', color='tomato',
-         label='Ever Treated')
-plt.title('1.3 — Mean Observed Outcome Over Time', fontsize=13)
-plt.xlabel('Time Period')
-plt.ylabel('Mean Outcome')
-plt.legend()
-plt.grid(alpha=0.4)
+print("\n" + "="*50)
+print("ΑΠΟΤΕΛΕΣΜΑΤΑ: Neural Text Classifier")
+print("="*50)
+
+cm_nn = confusion_matrix(y_test_arr, y_pred_nn)
+print(f"Confusion Matrix:\n{cm_nn}")
+print(f"\nClassification Report:\n{classification_report(y_test_arr, y_pred_nn)}")
+
+acc_nn = accuracy_score(y_test_arr, y_pred_nn)
+print(f"Accuracy: {acc_nn:.4f}")
+
+# Οπτικοποίηση confusion matrix για neural model
+fig, ax = plt.subplots(figsize=(5, 4))
+ConfusionMatrixDisplay(cm_nn, display_labels=['Low Effect', 'High Effect']).plot(ax=ax)
+ax.set_title('Confusion Matrix — Neural Text Classifier')
 plt.tight_layout()
-plt.savefig(r"C:\Users\Bagel\Desktop\Python_Task_2\plot_1_3_mean_outcome.png", dpi=150)
+plt.savefig(r"C:\Users\\Bagel\Desktop\Python_Task_2\neural.png", dpi=150)
 plt.show()
-print("Saved: plot_1_3_mean_outcome.png")
 
-# -----------------------------------------------------------------------------
-# 1.7 Τέσσερις treated units — ΟΛΑ ΣΕ ΜΙΑ ΕΙΚΟΝΑ (2x2 grid)
-# -----------------------------------------------------------------------------
-treated_units_list = df[df['ever_treated'] == 1]['unit_id'].unique()
-selected_units     = treated_units_list[:4]
+# Καμπύλη εκπαίδευσης (training vs validation accuracy)
+fig, axes = plt.subplots(1, 2, figsize=(12, 4))
 
-fig, axes = plt.subplots(2, 2, figsize=(14, 10))
-axes = axes.flatten()
+axes[0].plot(history.history['accuracy'], label='Train Accuracy')
+axes[0].plot(history.history['val_accuracy'], label='Val Accuracy')
+axes[0].set_xlabel('Epoch')
+axes[0].set_ylabel('Accuracy')
+axes[0].set_title('Neural Model — Accuracy κατά την εκπαίδευση')
+axes[0].legend()
+axes[0].grid(alpha=0.4)
 
-for idx, unit in enumerate(selected_units):
-    ax      = axes[idx]
-    unit_df = df[df['unit_id'] == unit].sort_values('time')
-    treat_t = unit_df['treat_time'].iloc[0]
+axes[1].plot(history.history['loss'], label='Train Loss')
+axes[1].plot(history.history['val_loss'], label='Val Loss')
+axes[1].set_xlabel('Epoch')
+axes[1].set_ylabel('Loss')
+axes[1].set_title('Neural Model — Loss κατά την εκπαίδευση')
+axes[1].legend()
+axes[1].grid(alpha=0.4)
 
-    ax.plot(unit_df['time'], unit_df['outcome'],
-            'o-', color='steelblue', label='Observed')
-    ax.plot(unit_df['time'], unit_df['pred0'],
-            's--', color='tomato', label='Predicted No-Treatment')
-    ax.axvline(x=treat_t, color='green', linestyle='--', linewidth=1.5,
-               label=f'Treatment Start (t={int(treat_t)})')
-    ax.set_title(f'Unit {unit}', fontsize=11)
-    ax.set_xlabel('Time')
-    ax.set_ylabel('Outcome')
-    ax.legend(fontsize=8)
-    ax.grid(alpha=0.4)
-
-fig.suptitle('1.7 — Observed vs Predicted No-Treatment Path (4 Treated Units)',
-             fontsize=13, y=1.01)
 plt.tight_layout()
-plt.savefig(r"C:\Users\Bagel\Desktop\Python_Task_2\plot_1_7_units.png",
-            dpi=150, bbox_inches='tight')
+plt.savefig(r"C:\Users\\Bagel\Desktop\Python_Task_2\training_curves.png", dpi=150)
 plt.show()
-print("Saved: plot_1_7_units.png")
 
-# -----------------------------------------------------------------------------
-# 1.9 Event-time ATT line plot
-# -----------------------------------------------------------------------------
-event_att_df = event_att.reset_index()
-event_att_df.columns = ['event_time', 'ATT']
+# =============================================================================
+# TASK 2.8: ΣΥΓΚΡΙΣΗ ΤΩΝ ΔΥΟ ΜΟΝΤΕΛΩΝ
+# =============================================================================
 
-plt.figure(figsize=(10, 5))
-plt.plot(event_att_df['event_time'], event_att_df['ATT'],
-         marker='o', linestyle='-', color='steelblue',
-         linewidth=2, markersize=7, label='Event-time ATT')
-plt.axhline(y=0, color='gray', linestyle='--', linewidth=1, label='Zero line')
+from sklearn.metrics import precision_score, recall_score, f1_score
 
-for _, row in event_att_df.iterrows():
-    plt.text(row['event_time'], row['ATT'] + 0.05,
-             f"{row['ATT']:.2f}", ha='center', fontsize=8)
+# Υπολογίζουμε τις ίδιες μετρικές και για τα δύο μοντέλα
+comparison = pd.DataFrame({
+    'Model': ['TF-IDF + Logistic Regression', 'Neural Text Classifier'],
+    'Accuracy': [
+        accuracy_score(y_test, y_pred_lr),
+        accuracy_score(y_test_arr, y_pred_nn)
+    ],
+    'Precision': [
+        precision_score(y_test, y_pred_lr, average='weighted'),
+        precision_score(y_test_arr, y_pred_nn, average='weighted')
+    ],
+    'Recall': [
+        recall_score(y_test, y_pred_lr, average='weighted'),
+        recall_score(y_test_arr, y_pred_nn, average='weighted')
+    ],
+    'F1-Score': [
+        f1_score(y_test, y_pred_lr, average='weighted'),
+        f1_score(y_test_arr, y_pred_nn, average='weighted')
+    ]
+})
 
-plt.title('1.9 — Event-Time ATT (Average Treatment Effect on the Treated)',
-          fontsize=13)
-plt.xlabel('Event Time (Periods Since Treatment Start)')
-plt.ylabel('ATT')
-plt.xticks(event_att_df['event_time'].astype(int))
-plt.legend()
-plt.grid(alpha=0.4)
+print("\n" + "="*50)
+print("ΣΥΓΚΡΙΣΗ ΜΟΝΤΕΛΩΝ")
+print("="*50)
+print(comparison.to_string(index=False))
+
+# Bar chart σύγκρισης μετρικών
+metrics = ['Accuracy', 'Precision', 'Recall', 'F1-Score']
+x = np.arange(len(metrics))
+width = 0.35
+
+fig, ax = plt.subplots(figsize=(10, 5))
+bars1 = ax.bar(x - width/2, comparison.iloc[0][metrics], width,
+               label='TF-IDF + LR', color='steelblue')
+bars2 = ax.bar(x + width/2, comparison.iloc[1][metrics], width,
+               label='Neural', color='darkorange')
+
+ax.set_xticks(x)
+ax.set_xticklabels(metrics)
+ax.set_ylim(0, 1.1)
+ax.set_ylabel('Score')
+ax.set_title('Σύγκριση TF-IDF LR vs Neural Classifier')
+ax.legend()
+ax.grid(axis='y', alpha=0.4)
+
+# Προσθήκη τιμών πάνω από κάθε μπάρα
+for bar in bars1:
+    ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.02,
+            f'{bar.get_height():.2f}', ha='center', va='bottom', fontsize=9)
+for bar in bars2:
+    ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.02,
+            f'{bar.get_height():.2f}', ha='center', va='bottom', fontsize=9)
+
 plt.tight_layout()
-plt.savefig(r"C:\Users\Bagel\Desktop\Python_Task_2\plot_1_9_event_att.png", dpi=150)
+plt.savefig(r"C:\Users\\Bagel\Desktop\Python_Task_2\modelcomparison.png", dpi=150)
 plt.show()
-print("Saved: plot_1_9_event_att.png")
+print("Αποθηκεύτηκε: ex2_model_comparison.png")
 
-# -----------------------------------------------------------------------------
-# Export labels for Exercise 2
-# -----------------------------------------------------------------------------
-unit_tau_ex2 = df[df['treated_post']].groupby('unit_id')['tau'].mean().reset_index()
-unit_tau_ex2.columns = ['unit_id', 'tau_i']
-median_tau = unit_tau_ex2['tau_i'].median()
-unit_tau_ex2['H_i'] = (unit_tau_ex2['tau_i'] > median_tau).astype(int)
+# =============================================================================
+# TASK 2.9: ΕΡΜΗΝΕΙΑ ΑΠΟΤΕΛΕΣΜΑΤΩΝ (να συμπληρωθεί στην αναφορά)
+# =============================================================================
 
-unit_tau_ex2.to_csv(r"C:\Users\Bagel\Desktop\Python_Task_2\unit_effect_labels.csv", index=False)
+print("""
+=== TASK 2.9: ΕΡΜΗΝΕΙΑ (να αναπτυχθεί στην αναφορά) ===
 
-print("\n--- Exercise 1 completed successfully ---")
+Σημεία που πρέπει να καλύψεις σε 5-8 προτάσεις:
+1. Είναι το κείμενο πληροφοριακό για το treatment effect heterogeneity;
+2. Ποιο μοντέλο τα πήγε καλύτερα και γιατί;
+3. Τι υποδηλώνουν οι top λέξεις για τα χαρακτηριστικά high-effect units;
+4. Περιορισμοί: μικρό sample size, balanced classes;
+5. Πρακτικές συνέπειες για policy targeting.
+""")
+
+print("\n=== ΟΛΟΚΛΗΡΩΘΗΚΕ ΤΟ EXERCISE 2 ===")
