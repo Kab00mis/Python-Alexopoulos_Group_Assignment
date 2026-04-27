@@ -100,25 +100,26 @@ print("\n15 πιο συχνές λέξεις:")
 for word, count in top_15:
     print(f"  {word}: {count}")
 
-# --- Bar plot με πορτοκαλί-κόκκινη παλέτα ---
+# --- Bar plot με μωβ-τιρκουάζ παλέτα ---
 fig, axes = plt.subplots(1, 2, figsize=(16, 5))
-fig.patch.set_facecolor('#F9F9F9')
+fig.patch.set_facecolor('#EEF2F7')
 
-bar_colors = plt.cm.YlOrRd(np.linspace(0.35, 0.85, 15))
-axes[0].barh(top_words[::-1], top_counts[::-1], color=bar_colors)
+bar_colors = plt.cm.cool(np.linspace(0.2, 0.9, 15))
+axes[0].barh(top_words[::-1], top_counts[::-1], color=bar_colors,
+             edgecolor='white', linewidth=0.5)
 axes[0].set_xlabel('Συχνότητα', fontsize=11)
 axes[0].set_title('Top 15 Πιο Συχνές Λέξεις', fontsize=12, fontweight='bold')
-axes[0].grid(axis='x', alpha=0.4)
-axes[0].set_facecolor('#F4F4F4')
+axes[0].grid(axis='x', alpha=0.3, color='white')
+axes[0].set_facecolor('#D8E8F0')
 
-# --- Word Cloud με πράσινη παλέτα ---
+# --- Word Cloud με πορτοκαλί παλέτα και σκούρο φόντο ---
 all_text_combined = ' '.join(df['clean_text'])
 wordcloud = WordCloud(
     width=800, height=400,
-    background_color='white',
+    background_color='#1A1A2E',
     max_words=100,
-    colormap='YlGn',
-    contour_color='darkgreen',
+    colormap='plasma',
+    contour_color='white',
     contour_width=1
 ).generate(all_text_combined)
 
@@ -165,12 +166,14 @@ print(f"\nClassification Report:\n{classification_report(y_test, y_pred_lr)}")
 acc_lr = accuracy_score(y_test, y_pred_lr)
 print(f"Accuracy: {acc_lr:.4f}")
 
-# Confusion matrix με πράσινη παλέτα
+# Confusion matrix με πορτοκαλί παλέτα
 fig, ax = plt.subplots(figsize=(5, 4))
+fig.patch.set_facecolor('#EEF2F7')
 disp = ConfusionMatrixDisplay(cm_lr, display_labels=['Low Effect', 'High Effect'])
-disp.plot(ax=ax, colorbar=True, cmap='Greens')
+disp.plot(ax=ax, colorbar=True, cmap='YlOrBr')
 ax.set_title('Confusion Matrix — TF-IDF + Logistic Regression',
              fontsize=11, fontweight='bold')
+ax.set_facecolor('#EEF2F7')
 plt.tight_layout()
 plt.savefig(r"C:\Users\Bagel\Desktop\Python_Task_2\logreg.png", dpi=150)
 plt.show()
@@ -235,43 +238,45 @@ print(f"\nClassification Report:\n{classification_report(y_test_arr, y_pred_nn)}
 acc_nn = accuracy_score(y_test_arr, y_pred_nn)
 print(f"Accuracy: {acc_nn:.4f}")
 
-# Confusion matrix με μοβ παλέτα (διαφορετική από LR)
+# Confusion matrix με τιρκουάζ παλέτα
 fig, ax = plt.subplots(figsize=(5, 4))
+fig.patch.set_facecolor('#EEF2F7')
 disp2 = ConfusionMatrixDisplay(cm_nn, display_labels=['Low Effect', 'High Effect'])
-disp2.plot(ax=ax, colorbar=True, cmap='Purples')
+disp2.plot(ax=ax, colorbar=True, cmap='GnBu')
 ax.set_title('Confusion Matrix — Neural Text Classifier',
              fontsize=11, fontweight='bold')
+ax.set_facecolor('#EEF2F7')
 plt.tight_layout()
 plt.savefig(r"C:\Users\Bagel\Desktop\Python_Task_2\neural.png", dpi=150)
 plt.show()
 
 # Καμπύλες εκπαίδευσης με διαφορετικά χρώματα
 fig, axes = plt.subplots(1, 2, figsize=(12, 4))
-fig.patch.set_facecolor('#F9F9F9')
+fig.patch.set_facecolor('#EEF2F7')
 
-axes[0].plot(history.history['accuracy'],     color='#2E86AB', linewidth=2,
-             label='Train Accuracy')
-axes[0].plot(history.history['val_accuracy'], color='#E84855', linewidth=2,
-             linestyle='--', label='Val Accuracy')
+axes[0].plot(history.history['accuracy'],     color='#6B2D8B', linewidth=2.5,
+             marker='o', markersize=4, label='Train Accuracy')
+axes[0].plot(history.history['val_accuracy'], color='#F4A261', linewidth=2.5,
+             marker='s', markersize=4, linestyle='--', label='Val Accuracy')
 axes[0].set_xlabel('Epoch')
 axes[0].set_ylabel('Accuracy')
 axes[0].set_title('Neural Model — Accuracy κατά την εκπαίδευση',
                   fontweight='bold')
 axes[0].legend()
-axes[0].grid(alpha=0.4)
-axes[0].set_facecolor('#F4F4F4')
+axes[0].grid(alpha=0.3, color='white')
+axes[0].set_facecolor('#D8E8F0')
 
-axes[1].plot(history.history['loss'],     color='#2E86AB', linewidth=2,
-             label='Train Loss')
-axes[1].plot(history.history['val_loss'], color='#E84855', linewidth=2,
-             linestyle='--', label='Val Loss')
+axes[1].plot(history.history['loss'],     color='#6B2D8B', linewidth=2.5,
+             marker='o', markersize=4, label='Train Loss')
+axes[1].plot(history.history['val_loss'], color='#F4A261', linewidth=2.5,
+             marker='s', markersize=4, linestyle='--', label='Val Loss')
 axes[1].set_xlabel('Epoch')
 axes[1].set_ylabel('Loss')
 axes[1].set_title('Neural Model — Loss κατά την εκπαίδευση',
                   fontweight='bold')
 axes[1].legend()
-axes[1].grid(alpha=0.4)
-axes[1].set_facecolor('#F4F4F4')
+axes[1].grid(alpha=0.3, color='white')
+axes[1].set_facecolor('#D8E8F0')
 
 plt.tight_layout()
 plt.savefig(r"C:\Users\Bagel\Desktop\Python_Task_2\training_curves.png", dpi=150)
@@ -304,12 +309,12 @@ x       = np.arange(len(metrics))
 width   = 0.35
 
 fig, ax = plt.subplots(figsize=(10, 5))
-fig.patch.set_facecolor('#F9F9F9')
+fig.patch.set_facecolor('#EEF2F7')
 
 bars1 = ax.bar(x - width/2, comparison.iloc[0][metrics], width,
-               label='TF-IDF + LR', color='#3A7CA5', edgecolor='white')
+               label='TF-IDF + LR', color='#6B2D8B', edgecolor='white')
 bars2 = ax.bar(x + width/2, comparison.iloc[1][metrics], width,
-               label='Neural',       color='#E07A5F', edgecolor='white')
+               label='Neural',       color='#F4A261', edgecolor='white')
 
 ax.set_xticks(x)
 ax.set_xticklabels(metrics, fontsize=11)
@@ -318,8 +323,8 @@ ax.set_ylabel('Score', fontsize=11)
 ax.set_title('Σύγκριση TF-IDF LR vs Neural Classifier',
              fontsize=13, fontweight='bold')
 ax.legend(fontsize=10)
-ax.grid(axis='y', alpha=0.4)
-ax.set_facecolor('#F4F4F4')
+ax.grid(axis='y', alpha=0.3, color='white')
+ax.set_facecolor('#D8E8F0')
 
 for bar in bars1:
     ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.02,
