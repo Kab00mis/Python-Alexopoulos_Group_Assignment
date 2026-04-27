@@ -1,0 +1,7 @@
+# Φορτώνουμε τα πραγματικά αποτελέσματα από το Task 1
+tau_unit = pd.read_csv(r"C:\Users\Bagel\Desktop\Python_Task_2\unit_effect_labels.csv")
+tau_unit = tau_unit.rename(columns={'tau_i': 'avg_tau', 'H_i': 'high_effect'})
+
+median_tau = tau_unit['avg_tau'].median()
+print(f"Διάμεσος treatment effect: {median_tau:.4f}")
+print(f"Κατανομή Hi:\n{tau_unit['high_effect'].value_counts()}")
